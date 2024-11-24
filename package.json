@@ -1,0 +1,14 @@
+{
+  "name": "pg-db-cluster",
+  "version": "1.0.0",
+  "private": true,
+  "workspaces": [
+    "backend"
+  ],
+  "scripts": {
+    "start": "bash scripts/start-cluster.sh",
+    "stop": "bash scripts/stop-cluster.sh",
+    "dev:backend": "cd backend && bun run dev",
+    "dev:frontend": "cd frontend && bun run dev"
+  }
+}

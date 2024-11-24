@@ -1,0 +1,14 @@
+services:
+  worker:
+    image: "citusdata/citus:latest"
+    labels: ["com.citusdata.role=Worker"]
+    environment: &AUTH
+      POSTGRES_USER: "${POSTGRES_USER:-postgres}"
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:-root}"
+      PGUSER: "${POSTGRES_USER:-postgres}"
+      PGPASSWORD: "${POSTGRES_PASSWORD:-root}"
+      POSTGRES_HOST_AUTH_METHOD: "${POSTGRES_HOST_AUTH_METHOD:-trust}"
+    volumes:
+      - worker-health:/healthcheck
+volumes:
+  worker-health:

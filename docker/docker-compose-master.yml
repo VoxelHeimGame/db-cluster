@@ -1,0 +1,26 @@
+services:
+  master:
+    image: "citusdata/citus:latest"
+    container_name: "${COMPOSE_PROJECT_NAME:-citus}_master"
+    labels:
+      - "com.citusdata.role=Master"
+    ports: ["${COORDINATOR_EXTERNAL_PORT:-5432}:5432"]
+    environment: &AUTH
+      POSTGRES_USER: "${POSTGRES_USER:-postgres}"
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:-root}"
+      PGUSER: "${POSTGRES_USER:-postgres}"
+      PGPASSWORD: "${POSTGRES_PASSWORD:-root}"
+      POSTGRES_HOST_AUTH_METHOD: "${POSTGRES_HOST_AUTH_METHOD:-trust}"
+
+  manager:
+    image: "citusdata/citus:latest"
+    container_name: "${COMPOSE_PROJECT_NAME:-citus}_manager"
+    labels:
+      - "com.citusdata.role=Manager"
+    volumes:
+      - "${DOCKER_SOCK:-/var/run/docker.sock}:/var/run/docker.sock"
+      - healthcheck-volume:/healthcheck
+    depends_on: [master]
+    environment: *AUTH
+volumes:
+  healthcheck-volume:
