@@ -1,7 +1,6 @@
 import { Pool } from 'pg';
 
 const databaseUrl = process.env.DATABASE_URL || 'postgres://postgres:root@localhost:5432';
-console.log('Connecting to database:', databaseUrl);
 
 const pool = new Pool({
   connectionString: databaseUrl,

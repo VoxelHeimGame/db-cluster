@@ -10,5 +10,9 @@
     "stop": "bash scripts/stop-cluster.sh",
     "dev:backend": "cd backend && bun run dev",
     "dev:frontend": "cd frontend && bun run dev"
+  },
+  "dependencies": {
+    "@elysiajs/swagger": "^1.1.6",
+    "elysia": "^1.1.25"
   }
 }

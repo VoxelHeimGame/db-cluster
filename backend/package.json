@@ -6,6 +6,7 @@
     "dev": "bun run --watch src/index.ts"
   },
   "dependencies": {
+    "@elysiajs/swagger": "^1.1.6",
     "elysia": "1.1.25",
     "pg": "8.13.1"
   },

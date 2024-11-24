@@ -1,289 +1,341 @@
-import { Elysia, t } from 'elysia';
-import { query } from '../db';
-import { exec } from 'child_process';
-import { promisify } from 'util';
-import path from 'path';
-import fs from 'fs';
+import { Elysia, t } from 'elysia'
+import { exec } from 'child_process'
+import { promisify } from 'util'
+import path from 'path'
+import fs from 'fs'
+import { logger } from '../utils/logger'
+import { query } from '../db'
 
-const execAsync = promisify(exec);
+const execAsync = promisify(exec)
 
-// Increase the timeout to 5 minutes (300000 ms)
-const EXEC_TIMEOUT = 300000;
+const EXEC_TIMEOUT = 300000 // 5 minutes
 
-// Function to normalize paths between Windows and Linux
 function normalizePath(inputPath: string): string {
-  return inputPath.replace(/\\/g, '/');
+  return inputPath.replace(/\\/g, '/')
 }
 
-// Function to get the project root directory
 function getRootDir(): string {
-  let currentDir = __dirname;
+  let currentDir = __dirname
   while (currentDir !== path.parse(currentDir).root) {
     if (fs.existsSync(path.join(currentDir, 'docker'))) {
-      return currentDir;
+      return currentDir
     }
-    currentDir = path.dirname(currentDir);
+    currentDir = path.dirname(currentDir)
   }
-  throw new Error('Docker directory not found in project structure');
+  throw new Error('Docker directory not found in project structure')
 }
 
-// Function to execute bash scripts and parse the output
 async function executeBashScript(scriptName: string, args: string[] = []): Promise<{ success: boolean; output: string; workerIp?: string }> {
   try {
-    const rootDir = getRootDir();
-    const dockerDir = path.join(rootDir, 'docker');
-    const scriptPath = path.join(dockerDir, scriptName);
+    const rootDir = getRootDir()
+    const dockerDir = path.join(rootDir, 'docker')
+    const scriptPath = path.join(dockerDir, scriptName)
     
-    const normalizedScriptPath = normalizePath(scriptPath);
-    const isWindows: boolean = process.platform === 'win32';
+    const normalizedScriptPath = normalizePath(scriptPath)
+    const isWindows: boolean = process.platform === 'win32'
     
-    let command;
+    let command: string
     if (isWindows) {
-      const gitBashPath = 'C:\\Program Files\\Git\\bin\\bash.exe';
-      command = `"${gitBashPath}" -c "cd '${dockerDir}' && ./${scriptName} ${args.join(' ')}"`;
+      const gitBashPath = 'C:\\Program Files\\Git\\bin\\bash.exe'
+      command = `"${gitBashPath}" -c "cd '${dockerDir}' && ./${scriptName} ${args.join(' ')}"`
     } else {
-      command = `cd '${dockerDir}' && bash ${scriptName} ${args.join(' ')}`;
+      command = `cd '${dockerDir}' && bash ${scriptName} ${args.join(' ')}`
     }
 
-    console.log(`Executing command: ${command}`);
-    console.log(`Working directory: ${dockerDir}`);
+    logger.debug(`Executing command: ${command}`)
+    logger.debug(`Working directory: ${dockerDir}`)
 
     const { stdout, stderr } = await execAsync(command, {
       cwd: dockerDir,
       timeout: EXEC_TIMEOUT,
       shell: isWindows ? 'cmd.exe' : '/bin/bash'
-    });
+    })
 
-    // Log complete output for debugging
-    console.log('Script stdout:', stdout);
+    logger.debug(`Script stdout: ${stdout}`)
     if (stderr) {
-      console.warn('Script stderr:', stderr);
+      logger.debug(`Script stderr: ${stderr}`)
     }
 
-    // Parse the output based on the script being executed
-    let success = false;
-    let workerIp: string | undefined;
+    let success = false
+    let workerIp: string | undefined
 
     if (scriptName === 'start_cluster.sh') {
-      success = stdout.includes('🎉 Citus Cluster') && stdout.includes('started successfully');
-      const ipMatch = stdout.match(/Registering worker (\d+\.\d+\.\d+\.\d+)/);
-      workerIp = ipMatch ? ipMatch[1] : undefined;
+      success = stdout.includes('🎉 Citus Cluster') && stdout.includes('started successfully')
+      const ipMatch = stdout.match(/Registering worker (\d+\.\d+\.\d+\.\d+)/)
+      workerIp = ipMatch ? ipMatch[1] : undefined
     } 
     else if (scriptName === 'stop_cluster.sh') {
-      success = stdout.includes('Citus Cluster') && stdout.includes('stopped and cleaned up completely');
+      success = stdout.includes('Citus Cluster') && stdout.includes('stopped and cleaned up completely')
     }
     else if (scriptName === 'add_worker.sh') {
-      success = stdout.includes('Worker(s) added and registered to the Citus cluster successfully');
-      const ipMatch = stdout.match(/Registering worker (\d+\.\d+\.\d+\.\d+)/);
-      workerIp = ipMatch ? ipMatch[1] : undefined;
+      success = stdout.includes('Worker(s) added and registered to the Citus cluster successfully')
+      const ipMatch = stdout.match(/Registering worker (\d+\.\d+\.\d+\.\d+)/)
+      workerIp = ipMatch ? ipMatch[1] : undefined
     }
     else if (scriptName === 'delete_worker.sh') {
-      success = stdout.includes('Workers removed successfully from both Docker and the Citus cluster');
+      success = stdout.includes('Workers removed successfully from both Docker and the Citus cluster')
     }
 
-    // The warning about orphan containers is expected and shouldn't affect success
-    if (stderr && !stderr.includes('Found orphan containers')) {
-      console.warn('Non-orphan warning in stderr:', stderr);
-    }
-
-    return { success, output: stdout, workerIp };
+    return { success, output: stdout, workerIp }
   } catch (error) {
-    console.error('Script execution error:', error);
+    logger.error(`Script execution error: ${error instanceof Error ? error.message : 'Unknown error'}`, {
+      scriptName,
+      args
+    })
     return { 
       success: false, 
       output: error instanceof Error ? error.message : 'Unknown error occurred' 
-    };
+    }
   }
 }
 
-// Function to get cluster status
 async function getClusterStatus(clusterId: string): Promise<{ 
-  isRunning: boolean; 
-  workerCount: number;
+  isRunning: boolean
+  workerCount: number
   workers: { nodename: string; nodeport: string }[] 
 }> {
   try {
-    const result = await query('SELECT * FROM citus_get_active_worker_nodes()');
+    const result = await query('SELECT * FROM citus_get_active_worker_nodes()')
     return {
       isRunning: result.rows.length > 0,
       workerCount: result.rows.length,
       workers: result.rows.map(row => ({ nodename: row.node_name, nodeport: row.node_port }))
-    };
+    }
   } catch (error) {
-    console.error(`Error getting cluster status: ${error}`);
-    return { isRunning: false, workerCount: 0, workers: [] };
+    logger.error(`Get cluster status error: ${error instanceof Error ? error.message : 'Unknown error'}`, { clusterId })
+    return { isRunning: false, workerCount: 0, workers: [] }
   }
 }
 
-// Function to start a cluster
 async function startCluster(clusterId: string, workersCount: number): Promise<{ success: boolean; status: Awaited<ReturnType<typeof getClusterStatus>> }> {
-  const result = await executeBashScript('start_cluster.sh', [clusterId, workersCount.toString()]);
+  const result = await executeBashScript('start_cluster.sh', [clusterId, workersCount.toString()])
   if (result.success) {
-    const status = await getClusterStatus(clusterId);
-    return { success: true, status };
+    const status = await getClusterStatus(clusterId)
+    return { success: true, status }
   }
-  return { success: false, status: { isRunning: false, workerCount: 0, workers: [] } };
+  return { success: false, status: { isRunning: false, workerCount: 0, workers: [] } }
 }
 
-// Function to stop a cluster
 async function stopCluster(clusterId: string): Promise<{ success: boolean }> {
-  const result = await executeBashScript('stop_cluster.sh', [clusterId]);
-  return { success: result.success };
+  const result = await executeBashScript('stop_cluster.sh', [clusterId])
+  return { success: result.success }
 }
 
-// Function to add a new worker using Docker script
 async function addWorkerWithDockerScript(clusterId: string, totalWorkers: number): Promise<{ success: boolean; workerIp?: string; output: string }> {
-  const result = await executeBashScript('add_worker.sh', [clusterId, (totalWorkers + 1).toString()]);
+  const result = await executeBashScript('add_worker.sh', [clusterId, (totalWorkers + 1).toString()])
   const success = result.output.includes('Worker(s) added and registered to the Citus cluster') && 
-                  !result.output.includes('Failed to register worker');
-  const ipMatch = result.output.match(/Registering worker (\d+\.\d+\.\d+\.\d+)/);
-  const workerIp = ipMatch ? ipMatch[1] : undefined;
-  return { success, workerIp, output: result.output };
+                  !result.output.includes('Failed to register worker')
+  const ipMatch = result.output.match(/Registering worker (\d+\.\d+\.\d+\.\d+)/)
+  const workerIp = ipMatch ? ipMatch[1] : undefined
+  return { success, workerIp, output: result.output }
 }
 
-// Function to remove workers using Docker script
 async function removeWorkersWithDockerScript(clusterId: string, workersToKeep: number): Promise<boolean> {
-  const result = await executeBashScript('delete_worker.sh', [clusterId, workersToKeep.toString()]);
-  return result.success;
+  const result = await executeBashScript('delete_worker.sh', [clusterId, workersToKeep.toString()])
+  return result.success
 }
 
-// Cluster routes
 export const clusterRoutes = new Elysia({ prefix: '/cluster' })
-  .onError(({ code, error }) => {
-    console.error(`Error in cluster routes (${code}):`, error);
+  .onError(({ code, error, set }) => {
+    logger.error(`Route error: ${error.message}`, { code })
+    set.status = code === 'NOT_FOUND' ? 404 : 500
     return {
       success: false,
       error: error.message,
       code
-    };
+    }
   })
-  .post('/:clusterId/start', async ({ params, body }) => {
-    const { clusterId } = params;
-    const { workersCount } = body;
-    console.log(`Starting cluster ${clusterId} with ${workersCount} workers...`);
+  .post('/:clusterId/start', async ({ params, body, set }) => {
+    const { clusterId } = params
+    const { workersCount } = body
+    logger.info(`Starting cluster ${clusterId} with ${workersCount} workers...`)
     try {
-      const result = await startCluster(clusterId, workersCount);
+      const result = await startCluster(clusterId, workersCount)
       if (result.success) {
+        logger.info(`Cluster ${clusterId} started successfully`, { status: result.status })
         return { 
           success: true, 
           message: `Cluster ${clusterId} started successfully`,
           status: result.status
-        };
+        }
       } else {
-        throw new Error(`Failed to start cluster ${clusterId}`);
+        throw new Error(`Failed to start cluster ${clusterId}`)
       }
     } catch (error) {
-      console.error(`Error starting cluster ${clusterId}:`, error);
+      logger.error(`Error starting cluster: ${error instanceof Error ? error.message : 'Unknown error'}`, { clusterId })
+      set.status = 500
       return { 
         success: false, 
         error: error instanceof Error ? error.message : 'An unknown error occurred'
-      };
+      }
     }
   }, {
+    params: t.Object({
+      clusterId: t.String()
+    }),
     body: t.Object({
       workersCount: t.Number()
-    })
+    }),
+    detail: {
+      tags: ['cluster'],
+      summary: 'Start a cluster',
+      description: 'Start a cluster with the specified ID and number of workers'
+    }
   })
-  .post('/:clusterId/stop', async ({ params }) => {
-    const { clusterId } = params;
-    console.log(`Stopping cluster ${clusterId}...`);
+  .post('/:clusterId/stop', async ({ params, set }) => {
+    const { clusterId } = params
+    logger.info(`Stopping cluster ${clusterId}...`)
     try {
-      const result = await stopCluster(clusterId);
+      const result = await stopCluster(clusterId)
       if (result.success) {
+        logger.info(`Cluster ${clusterId} stopped successfully`)
         return { 
           success: true, 
           message: `Cluster ${clusterId} stopped successfully`
-        };
+        }
       } else {
-        throw new Error(`Failed to stop cluster ${clusterId}`);
+        throw new Error(`Failed to stop cluster ${clusterId}`)
       }
     } catch (error) {
-      console.error(`Error stopping cluster ${clusterId}:`, error);
+      logger.error(`Error stopping cluster: ${error instanceof Error ? error.message : 'Unknown error'}`, { clusterId })
+      set.status = 500
       return { 
         success: false, 
         error: error instanceof Error ? error.message : 'An unknown error occurred'
-      };
+      }
+    }
+  }, {
+    params: t.Object({
+      clusterId: t.String()
+    }),
+    detail: {
+      tags: ['cluster'],
+      summary: 'Stop a cluster',
+      description: 'Stop a cluster with the specified ID'
     }
   })
-  .get('/:clusterId/workers', async ({ params }) => {
-    const { clusterId } = params;
-    console.log(`Fetching worker nodes for cluster ${clusterId}...`);
+  .get('/:clusterId/workers', async ({ params, set }) => {
+    const { clusterId } = params
+    logger.info(`Fetching worker nodes for cluster ${clusterId}...`)
     try {
-      const result = await query('SELECT * FROM citus_get_active_worker_nodes()');
-      return result.rows;
+      const result = await query('SELECT * FROM citus_get_active_worker_nodes()')
+      logger.info(`Successfully fetched worker nodes for cluster ${clusterId}`, { workerCount: result.rows.length })
+      return result.rows
     } catch (error) {
-      console.error(`Error fetching worker nodes for cluster ${clusterId}:`, error);
-      throw new Error('Failed to fetch worker nodes');
+      logger.error(`Error fetching worker nodes: ${error instanceof Error ? error.message : 'Unknown error'}`, { clusterId })
+      set.status = 500
+      throw new Error('Failed to fetch worker nodes')
+    }
+  }, {
+    params: t.Object({
+      clusterId: t.String()
+    }),
+    detail: {
+      tags: ['cluster'],
+      summary: 'Get cluster workers',
+      description: 'Retrieve all worker nodes for the specified cluster'
     }
   })
-  .post('/:clusterId/workers/add', async ({ params }) => {
-    const { clusterId } = params;
-    console.log(`Adding new worker node to cluster ${clusterId}...`);
+  .post('/:clusterId/workers/add', async ({ params, set }) => {
+    const { clusterId } = params
+    logger.info(`Adding new worker node to cluster ${clusterId}...`)
     try {
-      const currentWorkers = await query('SELECT COUNT(*) FROM citus_get_active_worker_nodes()');
-      const currentWorkerCount = parseInt(currentWorkers.rows[0].count);
+      const currentWorkers = await query('SELECT COUNT(*) FROM citus_get_active_worker_nodes()')
+      const currentWorkerCount = parseInt(currentWorkers.rows[0].count)
 
-      const { success, workerIp } = await addWorkerWithDockerScript(clusterId, currentWorkerCount);
+      const { success, workerIp } = await addWorkerWithDockerScript(clusterId, currentWorkerCount)
       if (!success || !workerIp) {
-        throw new Error(`Failed to start new worker for cluster ${clusterId}`);
+        throw new Error(`Failed to start new worker for cluster ${clusterId}`)
       }
 
-      console.log(`New worker added and verified: ${workerIp}`);
-      return { success: true, message: 'Worker node added successfully', node: workerIp };
+      logger.info(`New worker added and verified: ${workerIp}`, { clusterId })
+      return { success: true, message: 'Worker node added successfully', node: workerIp }
     } catch (error) {
-      console.error(`Error adding worker node to cluster ${clusterId}:`, error);
-      return { success: false, error: error instanceof Error ? error.message : 'An unknown error occurred' };
+      logger.error(`Error adding worker node: ${error instanceof Error ? error.message : 'Unknown error'}`, { clusterId })
+      set.status = 500
+      return { success: false, error: error instanceof Error ? error.message : 'An unknown error occurred' }
+    }
+  }, {
+    params: t.Object({
+      clusterId: t.String()
+    }),
+    detail: {
+      tags: ['cluster'],
+      summary: 'Add a worker to the cluster',
+      description: 'Add a new worker node to the specified cluster'
     }
   })
-  .post('/:clusterId/workers/remove', async ({ params }) => {
-    const { clusterId } = params;
-    console.log(`Removing worker node from cluster ${clusterId}...`);
+  .post('/:clusterId/workers/remove', async ({ params, set }) => {
+    const { clusterId } = params
+    logger.info(`Removing worker node from cluster ${clusterId}...`)
     try {
-      const workers = await query('SELECT COUNT(*) FROM citus_get_active_worker_nodes()');
-      const workerCount = parseInt(workers.rows[0].count);
+      const workers = await query('SELECT COUNT(*) FROM citus_get_active_worker_nodes()')
+      const workerCount = parseInt(workers.rows[0].count)
       
       if (workerCount <= 1) {
-        return { success: false, error: 'Cannot remove the last worker node' };
+        logger.warn(`Cannot remove the last worker node from cluster ${clusterId}`)
+        set.status = 400
+        return { success: false, error: 'Cannot remove the last worker node' }
       }
 
-      const workersToKeep = workerCount - 1;
-      console.log(`Removing workers to keep ${workersToKeep} nodes...`);
+      const workersToKeep = workerCount - 1
+      logger.info(`Removing workers to keep ${workersToKeep} nodes...`, { clusterId })
 
-      const isWorkerRemoved = await removeWorkersWithDockerScript(clusterId, workersToKeep);
+      const isWorkerRemoved = await removeWorkersWithDockerScript(clusterId, workersToKeep)
       if (!isWorkerRemoved) {
-        throw new Error(`Failed to remove workers from cluster ${clusterId}`);
+        throw new Error(`Failed to remove workers from cluster ${clusterId}`)
       }
 
-      // Verify the number of remaining workers
-      const remainingWorkers = await query('SELECT COUNT(*) FROM citus_get_active_worker_nodes()');
-      const actualRemainingWorkers = parseInt(remainingWorkers.rows[0].count);
+      const remainingWorkers = await query('SELECT COUNT(*) FROM citus_get_active_worker_nodes()')
+      const actualRemainingWorkers = parseInt(remainingWorkers.rows[0].count)
 
       if (actualRemainingWorkers !== workersToKeep) {
-        console.warn(`Expected ${workersToKeep} workers, but found ${actualRemainingWorkers}`);
+        logger.warn(`Expected ${workersToKeep} workers, but found ${actualRemainingWorkers}`, { clusterId })
       }
 
-      console.log(`Workers removed successfully. Remaining workers: ${actualRemainingWorkers}`);
-      return { success: true, message: `Workers removed successfully. Remaining workers: ${actualRemainingWorkers}` };
+      logger.info(`Workers removed successfully. Remaining workers: ${actualRemainingWorkers}`, { clusterId })
+      return { success: true, message: `Workers removed successfully. Remaining workers: ${actualRemainingWorkers}` }
     } catch (error) {
-      console.error(`Error removing worker node from cluster ${clusterId}:`, error);
-      return { success: false, error: error instanceof Error ? error.message : 'An unknown error occurred' };
+      logger.error(`Error removing worker node: ${error instanceof Error ? error.message : 'Unknown error'}`, { clusterId })
+      set.status = 500
+      return { success: false, error: error instanceof Error ? error.message : 'An unknown error occurred' }
+    }
+  }, {
+    params: t.Object({
+      clusterId: t.String()
+    }),
+    detail: {
+      tags: ['cluster'],
+      summary: 'Remove a worker from the cluster',
+      description: 'Remove a worker node from the specified cluster'
     }
   })
-  .get('/:clusterId/status', async ({ params }) => {
-    const { clusterId } = params;
-    console.log(`Fetching status for cluster ${clusterId}...`);
+  .get('/:clusterId/status', async ({ params, set }) => {
+    const { clusterId } = params
+    logger.info(`Fetching status for cluster ${clusterId}...`)
     try {
-      const status = await getClusterStatus(clusterId);
+      const status = await getClusterStatus(clusterId)
+      logger.info(`Successfully fetched status for cluster ${clusterId}`, { status })
       return { 
         success: true, 
         status 
-      };
+      }
     } catch (error) {
-      console.error(`Error fetching status for cluster ${clusterId}:`, error);
+      logger.error(`Error fetching cluster status: ${error instanceof Error ? error.message : 'Unknown error'}`, { clusterId })
+      set.status = 500
       return { 
         success: false, 
         error: error instanceof Error ? error.message : 'An unknown error occurred'
-      };
+      }
     }
-  });
+  }, {
+    params: t.Object({
+      clusterId: t.String()
+    }),
+    detail: {
+      tags: ['cluster'],
+      summary: 'Get cluster status',
+      description: 'Retrieve the current status of the specified cluster'
+    }
+  })
 
